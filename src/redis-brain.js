@@ -5,21 +5,19 @@
 //
 // Configuration:
 //   REDISTOGO_URL or REDISCLOUD_URL or BOXEN_REDIS_URL or REDIS_URL.
-//     URL format: redis://<host>:<port>[/<brain_prefix>]
-//     URL format (UNIX socket): redis://<socketpath>[?<brain_prefix>]
-//     If not provided, '<brain_prefix>' will default to 'hubot'.
-//   REDIS_NO_CHECK - set this to avoid ready check (for exampel when using Twemproxy)
+//     URL format: redis://<host>:<port>
+//     URL format (UNIX socket): redis://<socketpath>
 //
 // Commands:
 //   None
 
-const URL = require('url').URL
 const Redis = require('redis')
 
-module.exports = function (robot) {
-  let client, prefix
+module.exports = async function (robot) {
+  let client
+  const prefix = 'hubot'
   const redisUrlEnv = getRedisEnv()
-  const redisUrl = process.env[redisUrlEnv] || 'redis://localhost:6379'
+  const redisUrl = process.env[redisUrlEnv]
 
   if (redisUrlEnv) {
     robot.logger.info(`hubot-redis-brain: Discovered redis from ${redisUrlEnv} environment variable`)
@@ -27,19 +25,16 @@ module.exports = function (robot) {
     robot.logger.info('hubot-redis-brain: Using default redis on localhost:6379')
   }
 
-  if (process.env.REDIS_NO_CHECK) {
-    robot.logger.info('Turning off redis ready checks')
+  if (redisUrl) {
+    client = Redis.createClient({url: redisUrl, legacyMode: true})
+  } else {
+    client = Redis.createClient({legacyMode: true})
   }
 
-  const info = new URL(redisUrl)
-  if (info.hostname === '') {
-    client = Redis.createClient(info.pathname)
-    prefix = (info.query ? info.query.toString() : undefined) || 'hubot'
-  } else {
-    client = (info.auth || process.env.REDIS_NO_CHECK)
-      ? Redis.createClient(info.port, info.hostname, { no_ready_check: true })
-      : Redis.createClient(info.port, info.hostname)
-    prefix = (info.path ? info.path.replace('/', '') : undefined) || 'hubot'
+  try {
+    await client.connect()
+  } catch (e) {
+    robot.logger.error(e)
   }
 
   robot.brain.setAutoSave(false)
@@ -61,16 +56,7 @@ module.exports = function (robot) {
       robot.brain.setAutoSave(true)
     })
 
-  if (info.auth) {
-    client.auth(info.auth.split(':')[1], function (err) {
-      if (err) {
-        return robot.logger.error('hubot-redis-brain: Failed to authenticate to Redis')
-      }
-
-      robot.logger.info('hubot-redis-brain: Successfully authenticated to Redis')
-      getData()
-    })
-  }
+  getData()
 
   client.on('error', function (err) {
     if (!/ECONNREFUSED/.test(err.message)) {
@@ -80,7 +66,7 @@ module.exports = function (robot) {
 
   client.on('connect', function () {
     robot.logger.debug('hubot-redis-brain: Successfully connected to Redis')
-    if (!info.auth) { getData() }
+    getData()
   })
 
   robot.brain.on('save', (data) => {
